@@ -1,12 +1,12 @@
-from playwright.sync_api import sync_playwright, Playwright, Page, TimeoutError
-import time
+from playwright.sync_api import sync_playwright, Playwright
+from urllib.parse import urlparse, parse_qs
 
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import datetime
 
-import os
-import sys
+import requests
+
 def classificar_imovel(titulo):
     # Definir a tabela de correspondências
     tabela = [
@@ -130,6 +130,9 @@ def create_listing_xml(data):
         ET.SubElement(location, "Neighborhood").text = listing["location"]["neighborhood"]
         ET.SubElement(location, "Address").text = listing["location"]["address"]
         ET.SubElement(location, "StreetNumber").text = listing["location"]["street_number"]
+        ET.SubElement(location, "PostalCode").text = listing["location"]["postalCode"]
+        ET.SubElement(location, "Latitude").text = listing["location"]["latitude"]
+        ET.SubElement(location, "Longitude").text = listing["location"]["longitude"]
 
         contact = ET.SubElement(listing_element, "ContactInfo")
         ET.SubElement(contact, "Name").text = "Corretor Hélder"
@@ -142,12 +145,42 @@ def create_listing_xml(data):
     with open("output.xml", "w", encoding="utf-8") as file:
         file.write(xml_string)
 
+def coordenadas(page):
+    iframe_src = page.locator('iframe[src*="google.com/maps/embed"]').get_attribute('src')
+        
+    # Extrai as coordenadas da URL (parâmetro 'q')
+    url_params = parse_qs(urlparse(iframe_src).query)
+    coords = url_params.get('q', [None])[0]  # Pega o valor de 'q'
+    
+    if coords:
+        latitude, longitude = coords.split(',')
+        print(f'Latitude: {latitude}, Longitude: {longitude}')
+        return latitude, longitude
+    else:
+        print('Coordenadas não encontradas.')
 
-def tratar_endereco(endereco):
+
+def tratar_endereco(endereco, page):
     # Divida o endereço em partes
     partes = endereco.split(", ")    
     bairro = partes[-1].split(" - ")[0]
 
+    lat, lon = coordenadas(page)
+
+    print('Latitude: ', lat)
+    print('Longitude: ', lon)
+
+    url = f'https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json'
+
+    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+
+    if response.status_code == 200:
+        data = response.json()
+        rua = data['address'].get('road', 'Não encontrada')
+        cep = data['address'].get('postcode', 'Não encontrado')
+        print(f"Rua mais próxima: {rua}, CEP: {cep}")
+    else:
+        print("Erro na requisição")
 
     return {
         "state": "SC",
@@ -156,6 +189,9 @@ def tratar_endereco(endereco):
         "neighborhood": bairro,
         "address": partes[0],
         "street_number": partes[1],
+        "postalCode": cep,
+        "latitude": lat,
+        "longitude": lon
     }
 
 def estado_nome(sigla):
@@ -233,8 +269,6 @@ def run(playwright: Playwright, link):
 
         codigo = page.text_content("div.property-amenities > div:nth-child(1) > span")
 
-        print(codigo)
-
         codigo = codigo.upper()
 
         codigo_extraido = codigo.replace("CÓDIGO: ", "").strip()
@@ -283,7 +317,7 @@ def run(playwright: Playwright, link):
 
         endereco = page.text_content("div.clb-imovel-title p.endereco")
 
-        endereco_tratado = tratar_endereco(endereco)
+        endereco_tratado = tratar_endereco(endereco, page)
 
         preco = page.text_content("span.thumb-price[itemprop='price']").split(' ')[1]
        
@@ -386,6 +420,9 @@ def run(playwright: Playwright, link):
                     "neighborhood": endereco_tratado['neighborhood'],
                     "address": endereco_tratado['address'],
                     "street_number": endereco_tratado['street_number'],
+                    "postalCode": endereco_tratado['postalCode'],
+                    "latitude": endereco_tratado['latitude'],
+                    "longitude": endereco_tratado['longitude']
                 },
             }
                  
