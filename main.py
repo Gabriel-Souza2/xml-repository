@@ -6,6 +6,7 @@ from xml.dom import minidom
 import datetime
 
 import requests
+import time
 
 def classificar_imovel(titulo):
     # Definir a tabela de correspondências
@@ -160,35 +161,44 @@ def coordenadas(page):
         print('Coordenadas não encontradas.')
 
 
-def tratar_endereco(endereco, page):
-    # Divida o endereço em partes
+def tratar_endereco(endereco, page, max_retries=5, timeout=10):
     partes = endereco.split(", ")    
     bairro = partes[-1].split(" - ")[0]
 
     lat, lon = coordenadas(page)
-
     print('Latitude: ', lat)
     print('Longitude: ', lon)
 
     url = f'https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json'
 
-    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-
-    if response.status_code == 200:
-        data = response.json()
-        rua = data['address'].get('road', 'Não encontrada')
-        cep = data['address'].get('postcode', 'Não encontrado')
-        print(f"Rua mais próxima: {rua}, CEP: {cep}")
+    headers = {
+        "User-Agent": "MeuApp/1.0 (gabriel@nexusautomate.com.br)"  # Use um User-Agent válido
+    }
+        
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+            response.raise_for_status()  # Lança um erro se a resposta não for 200
+            data = response.json()
+            rua = data['address'].get('road', 'Não encontrada')
+            cep = data['address'].get('postcode', 'Não encontrado')
+            print(f"Rua mais próxima: {rua}, CEP: {cep}")
+            break  # Sai do loop se a requisição for bem-sucedida
+        except requests.exceptions.RequestException as e:
+            print(f"Erro na tentativa {attempt+1}: {e}")
+            time.sleep(15)  # Aguarda 2 segundos antes de tentar novamente
     else:
-        print("Erro na requisição")
-
+        print("Falha ao obter resposta após várias tentativas.")
+        rua, cep = "Desconhecido", "Desconhecido"
+    
+    time.sleep(10)
     return {
         "state": "SC",
         "state_name": "Santa Catarina",
         "city": "Florianópolis",
         "neighborhood": bairro,
         "address": partes[0],
-        "street_number": partes[1],
+        "street_number": partes[1] if len(partes) > 1 else "N/A",
         "postalCode": cep,
         "latitude": lat,
         "longitude": lon
@@ -206,9 +216,16 @@ def estado_nome(sigla):
 
 
 def converter_valor(valor):
-    """Converte string monetária para inteiro (em centavos, removendo caracteres não numéricos)."""
-    return int("".join(filter(str.isdigit, valor)))
+    """Converte número monetário para parte inteira como inteiro, removendo pontos e 'R$'."""
+    # Converte o valor para string e remove 'R$' se existir
+    print(valor)
+    valor_str = str(valor).replace('R$', '').replace('.', '').strip()
 
+    # Se o valor tiver vírgula, mantém apenas a parte antes da vírgula
+    valor_str = valor_str.split(',')[0]
+
+    print(f"Valor tratado: {valor_str}")
+    return int(valor_str)  # Retorna como inteiro
 
 def run(playwright: Playwright, link):
     chromium = playwright.chromium  # ou "firefox" ou "webkit"
@@ -319,6 +336,11 @@ def run(playwright: Playwright, link):
 
         endereco_tratado = tratar_endereco(endereco, page)
 
+        preco = page.query_selector("span.thumb-status:text('Venda') + span.thumb-price[itemprop='price']").inner_text().split(' ')[1]
+
+        # Exibe o valor do preço de venda tratado
+        print(preco)
+
         preco = page.text_content("span.thumb-price[itemprop='price']").split(' ')[1]
        
         details['price'] = converter_valor(preco)
@@ -341,20 +363,33 @@ def run(playwright: Playwright, link):
             print(f"Erro ao tentar pegar o valor de IPTU: {e}")
 
 
-
         try:
+            # Tenta pegar o elemento com o ID 'amenity-area-total'
             area_total = page.query_selector('#amenity-area-total span').inner_text()
             area_total = area_total.split(' ')[0]
             details['LotArea'] = area_total
         except Exception as e:
-            print(f"Erro ao tentar pegar area total: {e}")
+            try:
+                # Se falhar, tenta pegar o elemento com o ID 'amenity-area_total'
+                area_total = page.query_selector('#amenity-area_total span').inner_text()
+                area_total = area_total.split(' ')[0]
+                details['LotArea'] = area_total
+            except Exception as e:
+                print(f"Erro ao tentar pegar area total: {e}")
 
         try:
+            # Tenta pegar o elemento com o ID 'amenity-area-privativa'
             area_privativa = page.query_selector('#amenity-area-privativa span').inner_text()
             area_privativa = area_privativa.split(' ')[0]
             details['LivingArea'] = area_privativa
         except Exception as e:
-            print(f"Erro ao tentar pegar area total: {e}")
+            try:
+                # Se falhar, tenta pegar o elemento com o ID 'amenity-area_privativa'
+                area_privativa = page.query_selector('#amenity-area_privativa span').inner_text()
+                area_privativa = area_privativa.split(' ')[0]
+                details['LivingArea'] = area_privativa
+            except Exception as e:
+                print(f"Erro ao tentar pegar área privativa: {e}")
 
         try:
             numero_banheiros = page.locator('#amenity-banheiros span').text_content()
