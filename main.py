@@ -131,6 +131,7 @@ def create_listing_xml(data):
         ET.SubElement(location, "Neighborhood").text = listing["location"]["neighborhood"]
         ET.SubElement(location, "Address").text = listing["location"]["address"]
         ET.SubElement(location, "StreetNumber").text = listing["location"]["street_number"]
+        ET.SubElement(location, "Complement").text = "1"
         ET.SubElement(location, "PostalCode").text = listing["location"]["postalCode"]
         ET.SubElement(location, "Latitude").text = listing["location"]["latitude"]
         ET.SubElement(location, "Longitude").text = listing["location"]["longitude"]
@@ -191,7 +192,6 @@ def tratar_endereco(endereco, page, max_retries=5, timeout=10):
         print("Falha ao obter resposta após várias tentativas.")
         rua, cep = "Desconhecido", "Desconhecido"
     
-    time.sleep(10)
     return {
         "state": "SC",
         "state_name": "Santa Catarina",
@@ -336,12 +336,22 @@ def run(playwright: Playwright, link):
 
         endereco_tratado = tratar_endereco(endereco, page)
 
-        preco = page.query_selector("span.thumb-status:text('Venda') + span.thumb-price[itemprop='price']").inner_text().split(' ')[1]
+        container = page.query_selector("div.property-thumb-info-label")
 
-        # Exibe o valor do preço de venda tratado
-        print(preco)
+        if container:
+            # Busca todos os spans "property-thumb-item" dentro do container
+            items = container.query_selector_all("span.property-thumb-item")
+            
+            # Verifica se há pelo menos dois itens
+            if len(items) > 1:
+                segundo_item = items[1]  # Pega o segundo item
+                
+                # Obtém o status (Aluguel/Venda) e o preço
+                preco = segundo_item.query_selector("span.thumb-price[itemprop='price']").inner_text()
+            else:
+                preco = items[0].query_selector("span.thumb-price[itemprop='price']").inner_text()
 
-        preco = page.text_content("span.thumb-price[itemprop='price']").split(' ')[1]
+        preco = preco.split(' ')[1]
        
         details['price'] = converter_valor(preco)
 
